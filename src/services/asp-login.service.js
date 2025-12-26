@@ -24,13 +24,27 @@ async function simulateAspLogin(username, password) {
   let browser = null;
 
   try {
-    // Lancement du navigateur
+    // Lancement du navigateur avec options pour environnement cloud (Render, etc.)
     browser = await puppeteer.launch({
-      headless: true, // Mode sans interface graphique
+      headless: 'new', // Nouveau mode headless
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage'
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process', // Important pour les environnements cloud
+        '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--safebrowsing-disable-auto-update'
       ]
     });
 
