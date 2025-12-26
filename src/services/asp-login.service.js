@@ -1,4 +1,5 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 // URL de la page de connexion ASP Connect
 const LOGIN_URL = 'https://authkey.asp-public.fr/iam/realms/calypso-x/protocol/openid-connect/auth?client_id=2a5e70139a25174f7bb832167e8f251d&redirect_uri=https%3A%2F%2Fsylae.asp.gouv.fr%2Fportail-employeur%2F&state=db9d31f0-4077-43df-b1ce-d5e4e5c86417&response_mode=fragment&response_type=code&scope=openid&nonce=6e517a1b-9cf7-4a71-b92f-10281a56f1e0&code_challenge=MVIwIfA-fmmqsfnw5_aNdMI_3xrbdUDTnfD-cnKoijA&code_challenge_method=S256';
@@ -15,6 +16,60 @@ const SELECTORS = {
 };
 
 /**
+ * Lance le navigateur avec la bonne configuration selon l'environnement
+ */
+async function launchBrowser() {
+  // En production (Render, AWS, etc.), utiliser @sparticuz/chromium
+  if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
+    return puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+  }
+  
+  // En local, essayer de trouver Chrome installé sur le système
+  const possiblePaths = [
+    // macOS
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    // Linux
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    // Windows
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  ];
+
+  let executablePath = null;
+  const fs = require('fs');
+  
+  for (const path of possiblePaths) {
+    if (fs.existsSync(path)) {
+      executablePath = path;
+      break;
+    }
+  }
+
+  if (!executablePath) {
+    throw new Error('Chrome non trouvé. Installez Google Chrome ou définissez NODE_ENV=production pour utiliser @sparticuz/chromium');
+  }
+
+  return puppeteer.launch({
+    executablePath,
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu'
+    ]
+  });
+}
+
+/**
  * Simule une connexion sur ASP Connect
  * @param {string} username - L'identifiant de l'utilisateur (format: prenom.nom)
  * @param {string} password - Le mot de passe
@@ -24,29 +79,8 @@ async function simulateAspLogin(username, password) {
   let browser = null;
 
   try {
-    // Lancement du navigateur avec options pour environnement cloud (Render, etc.)
-    browser = await puppeteer.launch({
-      headless: 'new', // Nouveau mode headless
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process', // Important pour les environnements cloud
-        '--disable-gpu',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-extensions',
-        '--disable-sync',
-        '--disable-translate',
-        '--hide-scrollbars',
-        '--metrics-recording-only',
-        '--mute-audio',
-        '--safebrowsing-disable-auto-update'
-      ]
-    });
+    console.log('[PUPPETEER] Lancement du navigateur...');
+    browser = await launchBrowser();
 
     const page = await browser.newPage();
 
@@ -62,7 +96,7 @@ async function simulateAspLogin(username, password) {
     
     // Navigation vers la page de login
     await page.goto(LOGIN_URL, {
-      waitUntil: 'networkidle2', // Attendre que le réseau soit stable
+      waitUntil: 'networkidle2',
       timeout: 30000
     });
 
@@ -84,7 +118,7 @@ async function simulateAspLogin(username, password) {
       page.waitForNavigation({ 
         waitUntil: 'networkidle2',
         timeout: 30000 
-      }).catch(() => null), // Ignore l'erreur si pas de navigation (erreur de login)
+      }).catch(() => null),
       page.click(SELECTORS.loginButton)
     ]);
 
@@ -97,7 +131,6 @@ async function simulateAspLogin(username, password) {
 
     // Si on est encore sur la page d'authentification, chercher le message d'erreur
     if (currentUrl.includes('authkey.asp-public.fr') || currentUrl.includes('login-actions')) {
-      // Chercher les messages d'erreur
       const errorMessage = await extractErrorMessage(page);
       
       return {
@@ -114,7 +147,7 @@ async function simulateAspLogin(username, password) {
       };
     }
 
-    // Cas indéterminé - chercher quand même un message d'erreur
+    // Cas indéterminé
     const errorMessage = await extractErrorMessage(page);
     return {
       is_success: false,
@@ -128,7 +161,6 @@ async function simulateAspLogin(username, password) {
       error_message: `Erreur lors de la tentative de connexion: ${error.message}`
     };
   } finally {
-    // Toujours fermer le navigateur
     if (browser) {
       await browser.close();
     }
@@ -137,26 +169,21 @@ async function simulateAspLogin(username, password) {
 
 /**
  * Extrait le message d'erreur de la page
- * @param {import('puppeteer').Page} page
+ * @param {import('puppeteer-core').Page} page
  * @returns {Promise<string|null>}
  */
 async function extractErrorMessage(page) {
   try {
-    // Essayer plusieurs sélecteurs pour trouver le message d'erreur
     const errorSelectors = [
-      // DSFR alerts
       '.fr-alert--error .fr-alert__title',
       '.fr-alert--error p',
       '.fr-alert--error',
-      // Messages d'erreur Keycloak
       '.kc-feedback-text',
       '.alert-error',
       '#input-error',
-      // Messages génériques
       '.error-message',
       '[role="alert"]',
       '.fr-error-text',
-      // Message d'erreur dans le groupe de messages
       '#password-input-messages',
       '#username-messages'
     ];
@@ -172,7 +199,6 @@ async function extractErrorMessage(page) {
       }
     }
 
-    // Chercher tout élément contenant "erreur" ou "error" dans son texte
     const pageContent = await page.content();
     const errorMatch = pageContent.match(/class="[^"]*error[^"]*"[^>]*>([^<]+)</i);
     if (errorMatch && errorMatch[1]) {
@@ -187,4 +213,3 @@ async function extractErrorMessage(page) {
 }
 
 module.exports = { simulateAspLogin };
-

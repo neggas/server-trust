@@ -5,12 +5,12 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "build": "npx puppeteer browsers install chrome"
+    "dev": "node --watch src/server.js"
   },
   "dependencies": {
     "express": "^4.21.0",
-    "puppeteer": "^23.0.0"
+    "puppeteer-core": "^23.0.0",
+    "@sparticuz/chromium": "^131.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
