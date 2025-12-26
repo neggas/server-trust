@@ -1,8 +1,8 @@
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 
-// URL de la page de connexion ASP Connect
-const LOGIN_URL = 'https://authkey.asp-public.fr/iam/realms/calypso-x/protocol/openid-connect/auth?client_id=2a5e70139a25174f7bb832167e8f251d&redirect_uri=https%3A%2F%2Fsylae.asp.gouv.fr%2Fportail-employeur%2F&state=db9d31f0-4077-43df-b1ce-d5e4e5c86417&response_mode=fragment&response_type=code&scope=openid&nonce=6e517a1b-9cf7-4a71-b92f-10281a56f1e0&code_challenge=MVIwIfA-fmmqsfnw5_aNdMI_3xrbdUDTnfD-cnKoijA&code_challenge_method=S256';
+// URL du portail - il redirigera automatiquement vers la page de login avec des paramètres frais
+const PORTAL_URL = 'https://sylae.asp.gouv.fr/portail-employeur/';
 
 // Sélecteurs CSS basés sur le HTML fourni
 const SELECTORS = {
@@ -92,16 +92,20 @@ async function simulateAspLogin(username, password) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    console.log('[PUPPETEER] Navigation vers la page de connexion...');
+    console.log('[PUPPETEER] Navigation vers le portail...');
     
-    // Navigation vers la page de login
-    await page.goto(LOGIN_URL, {
+    // Navigation vers le portail - il redirigera vers la page de login
+    await page.goto(PORTAL_URL, {
       waitUntil: 'networkidle2',
-      timeout: 30000
+      timeout: 60000
     });
 
-    // Attendre que le formulaire soit visible
-    await page.waitForSelector(SELECTORS.usernameInput, { timeout: 10000 });
+    console.log('[PUPPETEER] URL après redirection:', page.url());
+
+    // Attendre que le formulaire de login soit visible
+    await page.waitForSelector(SELECTORS.usernameInput, { timeout: 15000 });
+    
+    console.log('[PUPPETEER] Formulaire de connexion trouvé');
 
     console.log('[PUPPETEER] Remplissage du formulaire...');
 
@@ -113,45 +117,62 @@ async function simulateAspLogin(username, password) {
 
     console.log('[PUPPETEER] Soumission du formulaire...');
 
-    // Cliquer sur le bouton de connexion et attendre la navigation
-    await Promise.all([
-      page.waitForNavigation({ 
-        waitUntil: 'networkidle2',
-        timeout: 30000 
-      }).catch(() => null),
-      page.click(SELECTORS.loginButton)
-    ]);
+    // Cliquer sur le bouton de connexion
+    await page.click(SELECTORS.loginButton);
+    
+    // Attendre soit une navigation, soit un message d'erreur
+    try {
+      await Promise.race([
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+        page.waitForSelector('.asp-alert--error, .fr-alert--error, .kc-feedback-text', { timeout: 30000 })
+      ]);
+    } catch (e) {
+      console.log('[PUPPETEER] Timeout en attendant la réponse');
+    }
 
-    // Petite pause pour laisser la page se charger complètement
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Petite pause pour laisser la page se stabiliser
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Vérifier si on est toujours sur la page de login (= échec)
+    // Vérifier l'URL actuelle
     const currentUrl = page.url();
     console.log('[PUPPETEER] URL actuelle:', currentUrl);
 
-    // Si on est encore sur la page d'authentification, chercher le message d'erreur
-    if (currentUrl.includes('authkey.asp-public.fr') || currentUrl.includes('login-actions')) {
-      const errorMessage = await extractErrorMessage(page);
-      
+    // Chercher d'abord s'il y a un message d'erreur visible
+    const errorMessage = await extractErrorMessage(page);
+    if (errorMessage) {
+      console.log('[PUPPETEER] Message d\'erreur trouvé:', errorMessage);
       return {
         is_success: false,
-        error_message: errorMessage || 'Échec de connexion (identifiants incorrects)'
+        error_message: errorMessage
       };
     }
 
-    // Si redirection vers sylae.asp.gouv.fr = succès
-    if (currentUrl.includes('sylae.asp') || currentUrl.includes('portail-employeur')) {
+    // Si on est redirigé vers le portail (pas sur la page d'auth) = succès
+    if (currentUrl.includes('sylae.asp.gouv.fr/portail-employeur') && !currentUrl.includes('authkey')) {
+      console.log('[PUPPETEER] Connexion réussie - redirection vers le portail');
       return {
         is_success: true,
         error_message: null
       };
     }
 
+    // Si on est encore sur la page d'authentification sans message d'erreur visible
+    if (currentUrl.includes('authkey.asp-public.fr') || currentUrl.includes('login-actions')) {
+      // Vérifier le contenu de la page pour plus d'infos
+      const pageTitle = await page.title();
+      console.log('[PUPPETEER] Titre de la page:', pageTitle);
+      
+      return {
+        is_success: false,
+        error_message: 'Identifiant ou mot de passe incorrect/inconnu'
+      };
+    }
+
     // Cas indéterminé
-    const errorMessage = await extractErrorMessage(page);
+    console.log('[PUPPETEER] État indéterminé');
     return {
       is_success: false,
-      error_message: errorMessage || 'État de connexion indéterminé'
+      error_message: 'État de connexion indéterminé'
     };
 
   } catch (error) {
@@ -174,35 +195,64 @@ async function simulateAspLogin(username, password) {
  */
 async function extractErrorMessage(page) {
   try {
+    // Sélecteurs spécifiques au site ASP Connect
     const errorSelectors = [
-      '.fr-alert--error .fr-alert__title',
+      // Alerte ASP personnalisée
+      '.asp-alert--error p',
+      '.asp-alert--error',
+      '#error-message',
+      // DSFR alerts
       '.fr-alert--error p',
+      '.fr-alert--error .fr-alert__title',
       '.fr-alert--error',
+      // Keycloak
       '.kc-feedback-text',
       '.alert-error',
-      '#input-error',
-      '.error-message',
+      '#kc-content-wrapper .alert',
+      // Messages génériques
+      '[role="alert"] p',
       '[role="alert"]',
-      '.fr-error-text',
-      '#password-input-messages',
-      '#username-messages'
+      '.error-message',
+      '.fr-error-text'
     ];
 
     for (const selector of errorSelectors) {
       const element = await page.$(selector);
       if (element) {
-        const text = await page.evaluate(el => el.textContent, element);
-        const cleanText = text?.trim();
-        if (cleanText && cleanText.length > 0) {
-          return cleanText;
+        // Vérifier si l'élément est visible
+        const isVisible = await page.evaluate(el => {
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null;
+        }, element);
+        
+        if (isVisible) {
+          const text = await page.evaluate(el => el.textContent, element);
+          const cleanText = text?.trim();
+          if (cleanText && cleanText.length > 0 && cleanText.length < 500) {
+            return cleanText;
+          }
         }
       }
     }
 
+    // Chercher dans le HTML brut
     const pageContent = await page.content();
-    const errorMatch = pageContent.match(/class="[^"]*error[^"]*"[^>]*>([^<]+)</i);
-    if (errorMatch && errorMatch[1]) {
-      return errorMatch[1].trim();
+    
+    // Pattern pour les messages d'erreur ASP
+    const patterns = [
+      /id="error-message"[^>]*>([^<]+)</i,
+      /class="[^"]*asp-alert--error[^"]*"[^>]*>.*?<p[^>]*>([^<]+)</is,
+      /class="[^"]*kc-feedback-text[^"]*"[^>]*>([^<]+)</i
+    ];
+    
+    for (const pattern of patterns) {
+      const match = pageContent.match(pattern);
+      if (match && match[1]) {
+        const cleanText = match[1].trim();
+        if (cleanText.length > 0) {
+          return cleanText;
+        }
+      }
     }
 
     return null;
