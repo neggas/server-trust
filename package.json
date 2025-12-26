@@ -1,0 +1,14 @@
+{
+  "name": "asp-login-simulator",
+  "version": "1.0.0",
+  "description": "API server to simulate ASP Connect login using Puppeteer",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "puppeteer": "^23.0.0"
+  }
+}
