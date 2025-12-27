@@ -94,13 +94,45 @@ async function simulateAspLogin(username, password) {
 
     console.log('[PUPPETEER] Navigation vers le portail...');
     
-    // Navigation vers le portail - il redirigera vers la page de login
+    // Navigation vers le portail
     await page.goto(PORTAL_URL, {
       waitUntil: 'networkidle2',
       timeout: 60000
     });
 
-    console.log('[PUPPETEER] URL après redirection:', page.url());
+    console.log('[PUPPETEER] URL du portail:', page.url());
+
+    // Accepter les cookies si la bannière apparaît
+    try {
+      const cookieButton = await page.$('#id-tout-accepter, #id-tout-refuser');
+      if (cookieButton) {
+        await cookieButton.click();
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } catch (e) {
+      console.log('[PUPPETEER] Pas de bannière cookies ou déjà acceptée');
+    }
+
+    // Cliquer sur le bouton "Se connecter"
+    console.log('[PUPPETEER] Recherche du bouton Se connecter...');
+    
+    // Attendre que le bouton soit disponible
+    await page.waitForSelector('#btn-header-connexion, #id-se-connecter', { timeout: 10000 });
+    
+    // Cliquer sur le bouton de connexion
+    const connectButton = await page.$('#btn-header-connexion') || await page.$('#id-se-connecter');
+    if (connectButton) {
+      console.log('[PUPPETEER] Clic sur le bouton Se connecter...');
+      await connectButton.click();
+    } else {
+      throw new Error('Bouton de connexion non trouvé');
+    }
+
+    // Attendre la redirection vers la page de login Keycloak
+    console.log('[PUPPETEER] Attente de la redirection vers Keycloak...');
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+    
+    console.log('[PUPPETEER] URL après clic:', page.url());
 
     // Attendre que le formulaire de login soit visible
     await page.waitForSelector(SELECTORS.usernameInput, { timeout: 15000 });
